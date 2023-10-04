@@ -24,9 +24,11 @@ library(rmarkdown)
 library(kableExtra)
 library(tidycensus)
 library(tigris)
+library(mapview)
+library(stargazer)
 
 # functions and data directory
-root.dir = "https://raw.githubusercontent.com/urbanSpatial/Public-Policy-Analytics-Landing/master/DATA/"
+root.dir = "https://github.com/mafichman/musa_5080_2023.git"
 
 source("https://raw.githubusercontent.com/urbanSpatial/Public-Policy-Analytics-Landing/master/functions.r")
 
@@ -38,7 +40,7 @@ palette5 <- c("#25CB10", "#5AB60C", "#8FA108",   "#C48C04", "#FA7800")
 census_api_key("730e334cd384273fdcda9984e41c6444518d82d6", overwrite = TRUE)
 ```
 
-```{r results='hide'}
+```{r census_data results='hide'}
 varslist = c("B02001_001E",	"B02001_002E",	"B02001_003E",	"B02001_004E",	"B02001_005E",	"B02001_006E",	"B02001_007E",	"B02001_008E",	"B19013_001E",	"B15003_001E",	"B15003_017E",	"B15003_018E",	"B15003_021E",	"B15003_022E",	"B15003_023E",	"B15003_024E",	"B15003_025E",	"B25002_001E",	"B25002_002E",	"B25002_003E",	"B25003_001E",	"B25003_002E",	"B25003_003E")
 
 tracts <-  
@@ -52,15 +54,125 @@ tracts <- tracts %>%
   dplyr::select(GEOID, NAME, all_of(varslist))
 
 tracts <- tracts %>%
-  rename (TotPop = B02001_001E,	White = B02001_002E,	Black = B02001_003E,	AI = B02001_004E,	Asian = B02001_005E,	Pac_il = B02001_006E,	Other_Race = B02001_007E,	Multi_Race = B02001_008E,	MedInc = B19013_001E,	Pop25 = B15003_001E,	HS = B15003_017E,	GED = B15003_018E,	Assoc = B15003_021E,	Bach = B15003_022E,	Mast = B15003_023E,	ProfDeg = B15003_024E,	Doct = B15003_025E,	TotalHouse = B25002_001E,	Occupied = B25002_002E,	Vacant = B25002_003E,	TotalOcc = B25003_001E,	Own = B25003_002E,	Rent = B25003_003E)
+  rename (TotPop = B02001_001E,	White = B02001_002E,	Black = B02001_003E,	AI = B02001_004E,	
+          Asian = B02001_005E,	Pac_il = B02001_006E,	Other_Race = B02001_007E,	
+          Multi_Race = B02001_008E,	MedInc = B19013_001E,	Pop25 = B15003_001E,	HS = B15003_017E,	
+          GED = B15003_018E,	Assoc = B15003_021E,	Bach = B15003_022E,	Mast = B15003_023E,	
+          ProfDeg = B15003_024E,	Doct = B15003_025E,	TotalHouse = B25002_001E,	Occupied = B25002_002E,
+          Vacant = B25002_003E,	TotalOcc = B25003_001E,	Own = B25003_002E,	Rent = B25003_003E)
 
 
-st_write(tracts, "tracts_shape.shp")
+#st_write(tracts, "tracts_shape.shp")
 
 tracts_table <- st_drop_geometry(tracts)
 write.csv(tracts_table, file="tracts.csv")
 
 zips = zctas(year = 2010, state = 42)
-st_write(zips, "zipcodes.shp")
+#st_write(zips, "zipcodes.shp")
+
+comm_vars <- c("B08301_001E",	"B08301_002E",	"B08301_003E",	"B08301_004E",	"B08301_010E",
+          "B08301_011E",	"B08301_012E",	"B08301_013E",	"B08301_014E",	"B08301_018E",	"B08301_019E",
+          "B08301_021E")
+
+tracts_commute <-  
+  get_acs(geography = "tract",
+          variables = comm_vars,
+          year=2021, state=42,
+          county=101, output="wide", geometry=TRUE) %>%
+  st_transform('ESRI:102729')
+
+tracts_commute <- tracts_commute %>% 
+  dplyr::select(GEOID, NAME, all_of(comm_vars))
+
+tracts_commute <- tracts_commute %>%
+  rename (Tot_Comm = B08301_001E,	Auto = B08301_002E,	Auto_Alone = B08301_003E,	Carpool = B08301_004E,
+          Transit = B08301_010E,	Bus = B08301_011E,	Subway = B08301_012E,	
+          CommRail = B08301_013E,	Trolley = B08301_014E,	Bicycle = B08301_018E,	
+          Walked = B08301_019E,	WFH = B08301_021E)
+#write.csv(tracts_commute, file="tracts_commute.csv")
+
+ggplot() +
+  geom_sf(data = tracts_commute, mapping=aes(fill=CommRail))
+```
+
+```{r read_data}
+houses <- 
+  st_read("https://raw.githubusercontent.com/mafichman/musa_5080_2023/main/Midterm/data/2023/studentData.geojson", quiet = TRUE) %>%
+  st_transform('ESRI:102729')
+
+parks <- 
+  st_read("https://opendata.arcgis.com/datasets/d52445160ab14380a673e5849203eb64_0.geojson", 
+          quiet = TRUE) %>%
+  st_transform('ESRI:102729')
+
+crimes <- 
+  st_read("incidents_part1_part2.shp", 
+          quiet = TRUE) %>%
+  st_transform('ESRI:102729')
+
+hoods <-
+  st_read("Neighborhoods_Philadelphia.shp", 
+          quiet = TRUE) %>%
+  st_transform('ESRI:102729')
+
+el_catchment <-
+  st_read("Catchment_ES_2021-22/Catchment_ES_2021.shp", quiet = TRUE) %>%
+  st_transform('ESRI:102729')
+
+```
+
+```{r crime}
+
+#Filter crimes
+crimes.sf <-
+  crimes %>%
+    filter(text_gener == "Aggravated Assault Firearm" | text_gener == "Aggravated Assault No Firearm",
+           point_y > -1) %>%
+    dplyr::select(geometry) %>%
+    na.omit() %>%
+    distinct()
+
+# Counts of crime per buffer of house sale
+houses$crimes.Buffer <- houses %>% 
+    st_buffer(660) %>% 
+    aggregate(mutate(crimes.sf, counter = 1),., sum) %>%
+    pull(counter)
+
+## Nearest Neighbor Feature
+houses <-
+  houses %>% 
+    mutate(
+      crime_nn1 = nn_function(st_coordinates(houses), 
+                              st_coordinates(crimes.sf), k = 1),
+      
+      crime_nn2 = nn_function(st_coordinates(houses), 
+                              st_coordinates(crimes.sf), k = 2), 
+      
+      crime_nn3 = nn_function(st_coordinates(houses), 
+                              st_coordinates(crimes.sf), k = 3), 
+      
+      crime_nn4 = nn_function(st_coordinates(houses), 
+                              st_coordinates(crimes.sf), k = 4), 
+      
+      crime_nn5 = nn_function(st_coordinates(houses), 
+                              st_coordinates(crimes.sf), k = 5))
+
+```
+
+```{r catchment}
+
+houses <-
+  st_intersection(houses, (el_catchment %>% select(ES_ID)))
+
+```
+```{r neighborhood}
+
+houses <-
+  st_intersection(houses, (hoods %>% select(NAME)))
+
+```
+
+```{r summary_table}
+
 
 ```
