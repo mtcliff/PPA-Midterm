@@ -26,6 +26,7 @@ library(tidycensus)
 library(tigris)
 library(mapview)
 library(stargazer)
+library(corrr)
 
 # functions and data directory
 root.dir = "https://github.com/mafichman/musa_5080_2023.git"
@@ -93,12 +94,15 @@ tracts_commute <- tracts_commute %>%
 
 ggplot() +
   geom_sf(data = tracts_commute, mapping=aes(fill=CommRail))
+
 ```
 
 ```{r read_data}
-houses <- 
+allhouses <- 
   st_read("https://raw.githubusercontent.com/mafichman/musa_5080_2023/main/Midterm/data/2023/studentData.geojson", quiet = TRUE) %>%
   st_transform('ESRI:102729')
+
+houses <- allhouses %>% dplyr::filter(toPredict == "MODELLING")
 
 parks <- 
   st_read("https://opendata.arcgis.com/datasets/d52445160ab14380a673e5849203eb64_0.geojson", 
@@ -106,9 +110,7 @@ parks <-
   st_transform('ESRI:102729')
 
 crimes <- 
-  st_read("incidents_part1_part2.shp", 
-          quiet = TRUE) %>%
-  st_transform('ESRI:102729')
+  read.csv("incidents_part1_part2.csv")
 
 hoods <-
   st_read("Neighborhoods_Philadelphia.shp", 
@@ -119,17 +121,90 @@ el_catchment <-
   st_read("Catchment_ES_2021-22/Catchment_ES_2021.shp", quiet = TRUE) %>%
   st_transform('ESRI:102729')
 
+stores <- st_read("https://opendata.arcgis.com/datasets/53b8a1c653a74c92b2de23a5d7bf04a0_0.geojson",
+                  quiet = TRUE) %>%
+  st_transform('ESRI:102729')
+
+```
+
+```{r census_data_clean results='hide'}
+
+varslist = c("B02001_001E",	"B02001_002E", "B15003_001E",	"B15003_022E",	"B15003_023E",	
+             "B19013_001E", "B15003_024E",	"B15003_025E",	
+             "B25002_001E", "B25002_003E",	"B25003_001E",	"B25003_002E", "B08301_001E",	
+             "B08301_003E",	"B08301_010E", "B08301_013E",
+             "B08301_018E", "B08301_019E", "B08301_021E")
+
+tracts <-  
+  get_acs(geography = "tract",
+          variables = varslist, 
+          year=2021, state=42,
+          county=101, output="wide", geometry=TRUE) %>% 
+  st_transform('ESRI:102729')
+
+tracts <- tracts %>% 
+  dplyr::select(GEOID, NAME, all_of(varslist))
+
+tracts <- tracts %>%
+  rename(TotPop = B02001_001E,	White = B02001_002E,
+         MedInc = B19013_001E,
+         Pop25 = B15003_001E, Bach = B15003_022E,	Mast = B15003_023E,	
+         ProfDeg = B15003_024E,	Doct = B15003_025E,	TotalHouse = B25002_001E, 
+         Vacant = B25002_003E,	
+         TotalOcc = B25003_001E,	Own = B25003_002E, Tot_Comm = B08301_001E,	
+         Auto_Alone = B08301_003E,	Transit = B08301_010E,	
+         CommRail = B08301_013E,	Bicycle = B08301_018E, 
+         Walked = B08301_019E,	
+         WFH = B08301_021E) %>%
+  mutate(whitePct = White/TotPop,
+         degPct = (Bach+Mast+ProfDeg+Doct)/Pop25,
+         vacantPct = Vacant/TotalHouse,
+         ownPct = Own/TotalOcc,
+         autoPct = Auto_Alone/Tot_Comm,
+         transitPct = Transit/Tot_Comm,
+         commRailPct = CommRail/Tot_Comm,
+         bikePct = Bicycle/Tot_Comm,
+         walkPct = Walked/Tot_Comm,
+         wfhPct = WFH/Tot_Comm)
+
+```
+
+```{r add_census}
+
+houses <-
+  st_intersection(houses, (tracts %>% dplyr::select(whitePct, MedInc, degPct)))
+
+
+houses <- houses %>% mutate(degPct = replace_na(degPct, 0))
+
 ```
 
 ```{r crime}
 
 #Filter crimes
+# crimes.sf <-
+#   crimes %>%
+#     filter(text_gener == "Aggravated Assault Firearm" | text_gener == "Aggravated Assault No Firearm",
+#            point_y > -1) %>%
+#     dplyr::select(geometry) %>%
+#     na.omit() %>%
+#     distinct()
+
+crimes %>% 
+group_by(text_general_code) %>%
+  summarize(count = n()) %>%
+  arrange(-count) %>% top_n(10) %>%
+  kable() %>%
+  kable_styling()
+
 crimes.sf <-
   crimes %>%
-    filter(text_gener == "Aggravated Assault Firearm" | text_gener == "Aggravated Assault No Firearm",
-           point_y > -1) %>%
-    dplyr::select(geometry) %>%
+    filter(text_general_code == "Aggravated Assault Firearm" | text_general_code == "Aggravated Assault No Firearm",
+           lat > -1) %>%
+    dplyr::select(lat, lng) %>%
     na.omit() %>%
+    st_as_sf(coords = c("lng", "lat"), crs = "EPSG:4326") %>%
+    st_transform('ESRI:102729') %>%
     distinct()
 
 # Counts of crime per buffer of house sale
@@ -137,6 +212,8 @@ houses$crimes.Buffer <- houses %>%
     st_buffer(660) %>% 
     aggregate(mutate(crimes.sf, counter = 1),., sum) %>%
     pull(counter)
+
+houses <- houses %>% mutate(crimes.Buffer = replace_na(crimes.Buffer, 0))
 
 ## Nearest Neighbor Feature
 houses <-
@@ -162,17 +239,91 @@ houses <-
 ```{r catchment}
 
 houses <-
-  st_intersection(houses, (el_catchment %>% select(ES_ID)))
+  st_intersection(houses, (el_catchment %>% dplyr::select(ES_ID)))
 
 ```
+
 ```{r neighborhood}
 
 houses <-
-  st_intersection(houses, (hoods %>% select(NAME)))
+  st_intersection(houses, (hoods %>% dplyr::select(NAME)))
+
+```
+
+
+```{r high_produce_stores}
+
+stores$prodRatio <- stores$TOTAL_HPSS/stores$TOTAL_LPSS 
+
+houses <-
+  st_intersection(houses, (stores %>% dplyr::select(prodRatio, TOTAL_LPSS, TOTAL_HPSS)))
+
+houses <- houses %>% mutate(prodRAtio = replace_na(prodRatio, 0))
+
+```
+
+```{r parks}
+
+#parksPt <- st_centroid(parks)
+
+parks4buff <- parks %>% dplyr::select(geometry)
+
+#3960 ft = .75 miles ~ 15 minutes walking distance
+houses$parks.Buffer <- houses %>% 
+    st_buffer(2640) %>% 
+    aggregate(mutate(parks4buff, counter = 1),., sum) %>%
+    pull(counter)
+
+houses <- houses %>% mutate(parks.Buffer = replace_na(parks.Buffer, 0))
 
 ```
 
 ```{r summary_table}
+
+
+```
+
+```{r correlation_matrix}
+numericVars <- 
+  select_if(st_drop_geometry(houses), is.numeric) %>%
+  dplyr::select(sale_price, total_livable_area, year_built, exterior_condition, fireplaces, 
+                frontage, garage_spaces, interior_condition, total_livable_area, degPct, 
+                crimes.Buffer, crime_nn1, crime_nn2, crime_nn3, crime_nn4, crime_nn5, 
+                parks.Buffer, prodRatio, TOTAL_LPSS, TOTAL_HPSS) %>%
+  na.omit()
+
+ggcorrplot(
+  round(cor(numericVars), 1), 
+  p.mat = cor_pmat(numericVars),
+  colors = c("#25CB10", "white", "#FA7800"),
+  type="lower",
+  insig = "blank") +  
+    labs(title = "Correlation across numeric variables") 
+
+# yet another way to plot the correlation plot using the corrr library
+numericVars %>% 
+  correlate() %>% 
+  autoplot() +
+  geom_text(aes(label = round(r,digits=2)),size = 2)
+
+```
+
+```{r correlation_scatterplots}
+
+st_drop_geometry(houses) %>% 
+  dplyr::select(sale_price, total_livable_area, TOTAL_HPSS, degPct, crime_nn3) %>%
+  filter(sale_price <= 1000000, houses$year_built > 1523, total_livable_area < 10000) %>%
+  gather(Variable, Value, -sale_price) %>% 
+   ggplot(aes(Value, sale_price)) +
+     geom_point(size = .5) + geom_smooth(method = "lm", se=F, colour = "#FA7800") +
+     facet_wrap(~Variable, ncol = 3, scales = "free") +
+     labs(title = "Price as a function of continuous variables") +
+     plotTheme()
+
+```
+
+```{r price_map}
+
 
 
 ```
