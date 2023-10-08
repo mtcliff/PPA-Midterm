@@ -27,6 +27,8 @@ library(tigris)
 library(mapview)
 library(stargazer)
 library(corrr)
+library(vtable)
+library(sfdep)
 
 # functions and data directory
 root.dir = "https://github.com/mafichman/musa_5080_2023.git"
@@ -34,6 +36,22 @@ root.dir = "https://github.com/mafichman/musa_5080_2023.git"
 source("https://raw.githubusercontent.com/urbanSpatial/Public-Policy-Analytics-Landing/master/functions.r")
 
 palette5 <- c("#25CB10", "#5AB60C", "#8FA108",   "#C48C04", "#FA7800")
+
+```
+
+```{r qbrNoRound_function}
+
+qBrNoRound <- 
+  function(df, variable, rnd) {
+  if (missing(rnd)) {
+    as.character(quantile(round(df[[variable]],2),
+                          c(.01,.2,.4,.6,.8), na.rm=T))
+  } else if (rnd == FALSE | rnd == F) {
+    as.character(formatC(quantile(df[[variable]],
+                                  c(.01,.2,.4,.6,.8), na.rm=T),
+                         digits = 3))
+  }
+}
 
 ```
 
@@ -236,14 +254,14 @@ houses <-
 
 ```
 
-```{r catchment}
+```{r catchment, warning=FALSE}
 
 houses <-
   st_intersection(houses, (el_catchment %>% dplyr::select(ES_ID)))
 
 ```
 
-```{r neighborhood}
+```{r neighborhood, warning=FALSE}
 
 houses <-
   st_intersection(houses, (hoods %>% dplyr::select(NAME)))
@@ -251,14 +269,14 @@ houses <-
 ```
 
 
-```{r high_produce_stores}
+```{r high_produce_stores, warning=FALSE}
 
 stores$prodRatio <- stores$TOTAL_HPSS/stores$TOTAL_LPSS 
 
 houses <-
   st_intersection(houses, (stores %>% dplyr::select(prodRatio, TOTAL_LPSS, TOTAL_HPSS)))
 
-houses <- houses %>% mutate(prodRAtio = replace_na(prodRatio, 0))
+houses <- houses %>% mutate(prodRatio = replace_na(prodRatio, 0))
 
 ```
 
@@ -268,7 +286,7 @@ houses <- houses %>% mutate(prodRAtio = replace_na(prodRatio, 0))
 
 parks4buff <- parks %>% dplyr::select(geometry)
 
-#3960 ft = .75 miles ~ 15 minutes walking distance
+#parks within 1/2 mile
 houses$parks.Buffer <- houses %>% 
     st_buffer(2640) %>% 
     aggregate(mutate(parks4buff, counter = 1),., sum) %>%
@@ -278,18 +296,50 @@ houses <- houses %>% mutate(parks.Buffer = replace_na(parks.Buffer, 0))
 
 ```
 
-```{r summary_table}
+```{r neighbor_prices}
 
+houses <- houses %>% 
+          mutate(nb = st_knn(geometry, k = 5),
+                 wt = st_weights(nb),
+                 price_lag = st_lag(sale_price, nb, wt))
 
 ```
 
-```{r correlation_matrix}
+```{r summary_table}
+
+allNumVars <- 
+  st_drop_geometry(houses) %>%
+  dplyr::select(sale_price, total_livable_area, year_built, exterior_condition, fireplaces, 
+                frontage, garage_spaces, interior_condition, total_livable_area,  
+                crimes.Buffer, crime_nn1, crime_nn2, crime_nn3, crime_nn4, crime_nn5, 
+                parks.Buffer, prodRatio, TOTAL_LPSS, TOTAL_HPSS, price_lag, degPct)
+
+qualVars <- 
+  st_drop_geometry(houses) %>%
+  dplyr::select(sale_price, building_code_description_new, quality_grade, view_type, ES_ID,
+                 NAME)
+
+stargazer(allNumVars, omit.summary.stat = "N", type = "text", title = "Summary Statistics")
+
+qualVars %>% group_by(quality_grade) %>%
+  summarize(meanPrice = mean(sale_price)) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = "striped")
+
+qualVars %>% group_by(building_code_description_new) %>%
+  summarize(meanPrice = mean(sale_price)) %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = "striped")
+
+```
+
+```{r correlation_matrix, message = FALSE}
 numericVars <- 
   select_if(st_drop_geometry(houses), is.numeric) %>%
   dplyr::select(sale_price, total_livable_area, year_built, exterior_condition, fireplaces, 
                 frontage, garage_spaces, interior_condition, total_livable_area, degPct, 
                 crimes.Buffer, crime_nn1, crime_nn2, crime_nn3, crime_nn4, crime_nn5, 
-                parks.Buffer, prodRatio, TOTAL_LPSS, TOTAL_HPSS) %>%
+                parks.Buffer, prodRatio, TOTAL_LPSS, TOTAL_HPSS, price_lag) %>%
   na.omit()
 
 ggcorrplot(
@@ -304,26 +354,236 @@ ggcorrplot(
 numericVars %>% 
   correlate() %>% 
   autoplot() +
-  geom_text(aes(label = round(r,digits=2)),size = 2)
+  geom_text(aes(label = round(r,digits=2)),size = 2) +
+  labs(caption = "Figure 1: Correlation Matrix of Numeric Variables")
 
 ```
 
-```{r correlation_scatterplots}
+```{r correlation_scatterplots, warning=FALSE}
 
 st_drop_geometry(houses) %>% 
-  dplyr::select(sale_price, total_livable_area, TOTAL_HPSS, degPct, crime_nn3) %>%
-  filter(sale_price <= 1000000, houses$year_built > 1523, total_livable_area < 10000) %>%
+  dplyr::select(sale_price, total_livable_area, TOTAL_HPSS, price_lag, crime_nn3) %>%
+  filter(sale_price <= 1000000, houses$year_built > 1523, total_livable_area < 10000,
+         price_lag<=1000000) %>%
   gather(Variable, Value, -sale_price) %>% 
    ggplot(aes(Value, sale_price)) +
      geom_point(size = .5) + geom_smooth(method = "lm", se=F, colour = "#FA7800") +
      facet_wrap(~Variable, ncol = 3, scales = "free") +
-     labs(title = "Price as a function of continuous variables") +
+     labs(title = "Price as a function of continuous variables",
+          caption = "Figure 2: Correlation Scatterplots for Selected Variables") +
      plotTheme()
+
+```
+
+```{r variable_maps}
+
+#parks.Buffer
+ggplot() +
+  geom_sf(data = hoods, fill = "grey50") +
+  geom_sf(data = houses, aes(colour = q5(parks.Buffer)), 
+          show.legend = "point", size = .75) +
+  scale_colour_manual(values = palette5,
+                   labels=qBr(houses,"parks.Buffer"),
+                   name="Quintile\nBreaks") +
+  labs(title="PPR Parks within 1/2 Mile, Philadelphia") +
+  mapTheme()
+
+#crime_nn3
+ggplot() +
+  geom_sf(data = hoods, fill = "grey50") +
+  geom_sf(data = houses, aes(colour = q5(crime_nn3)), 
+          show.legend = "point", size = .75) +
+  scale_colour_manual(values = palette5,
+                   labels=qBr(houses,"crime_nn3"),
+                   name="Quintile\nBreaks") +
+  labs(title="K=3 Nearest Neighbor Score\nfor Aggravated Assault, Philadelphia") +
+  mapTheme()
 
 ```
 
 ```{r price_map}
 
+## Plot sale price (modelling) 
 
+ggplot() +
+  geom_sf(data = hoods, fill = "grey40") +
+  geom_sf(data = houses, aes(colour = q5(sale_price)), 
+          show.legend = "point", size = .75) +
+  scale_colour_manual(values = palette5,
+                   labels=qBr(houses,"sale_price"),
+                   name="Quintile\nBreaks") +
+  labs(title="sale price") +
+  mapTheme()
+
+```
+
+```{r retail map}
+
+ggplot()+
+  geom_sf(data = stores, aes(fill = TOTAL_LPSS),
+          color = "transparent")+
+  labs(
+    title = "Number of Low-Produce Stores",
+    subtitle = "",
+    caption = "Data: ") +
+  mapTheme()
+
+ggplot()+
+  geom_sf(data = stores, aes(fill = TOTAL_HPSS),
+          color = "transparent")+
+  labs(
+    title = "Number of High-Produce Stores",
+    subtitle = "",
+    caption = "Data: ") +
+  mapTheme()
+
+
+
+ggplot()+
+  geom_sf(data = hoods, fill = "grey50") +
+  geom_sf(data = stores, aes(fill = q5(prodRatio)))+
+  scale_fill_manual(values = palette5,
+                   labels=qBrNoRound(stores,"prodRatio"),
+                   name="Quintile\nBreaks") + 
+  labs(
+    title = "High- and Low-produce ratio",
+    subtitle = "",
+    caption = "Data: ") + 
+  mapTheme()
+
+```
+
+
+```{r regression_test, warning=FALSE}
+
+inTrain <- createDataPartition(
+              y = paste(houses$building_code_description_new, houses$quality_grade,
+                        houses$view_type, houses$ES_ID, houses$NAME), 
+              p = .60, list = FALSE)
+houses.training <- houses[inTrain,] 
+houses.test <- houses[-inTrain,]  
+ 
+reg.training <- 
+  lm(houses.training$sale_price ~ ., data = as.data.frame(houses.training) %>% 
+                             dplyr::select(total_livable_area,  exterior_condition,
+                                           fireplaces, 
+                                           interior_condition, total_livable_area,
+                                           crime_nn3, parks.Buffer, prodRatio,
+                                           degPct, price_lag,
+                                           building_code_description_new,
+                                           view_type))
+
+summ(reg.training)
+
+houses.test <-
+  houses.test %>%
+  mutate(Regression = "Baseline Regression",
+         sale_price.Predict = predict(reg.training, houses.test),
+         sale_price.Error = sale_price.Predict - sale_price,
+         sale_price.AbsError = abs(sale_price.Predict - sale_price),
+         sale_price.APE = (abs(sale_price.Predict - sale_price)) / sale_price.Predict)%>%
+  filter(sale_price < 5000000) 
+
+
+houses.test %>% 
+  st_drop_geometry() %>%
+  summarize(MAE = mean(sale_price.AbsError, na.rm = T),
+            MAPE = mean(sale_price.APE, na.rm = T)) %>%
+  gather(Variable, Value) %>%
+  mutate(Value = round(Value, 2)) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = "condensed", full_width = F)
+```
+
+```{r cross_validation}
+
+fitControl <- trainControl(method = "cv", number = 100)
+set.seed(825)
+
+reg.cv <- 
+  train(sale_price ~ ., data = st_drop_geometry(houses) %>% 
+                                dplyr::select(sale_price, total_livable_area, 
+                                              exterior_condition,
+                                              fireplaces, interior_condition,
+                                              total_livable_area,
+                                              crime_nn3, parks.Buffer, prodRatio,
+                                              degPct, price_lag,
+                                              building_code_description_new,
+                                              view_type), 
+     method = "lm", trControl = fitControl, na.action = na.pass)
+
+reg.cv
+ggplot(reg.cv$resample, aes(x=MAE)) +
+  geom_histogram(fill = "#FA7800", color = "white") +
+  labs(
+    title = "MAE",
+    subtitle = "",
+    caption = "Figure:")
+```
+
+```{r price_comparison, warning=FALSE}
+
+st_drop_geometry(houses.test) %>% 
+  dplyr::select(sale_price, sale_price.Predict) %>%
+  filter(sale_price <= 1000000, sale_price.Predict <=1000000) %>%
+  ggplot(aes(sale_price, sale_price.Predict)) +
+     geom_point(size = .5) + geom_smooth(method = "lm", se=F, colour = "#FA7800") +
+     labs(title = "Predicted Sales Price as a Function of Observed Price",
+          caption = "Figure 2: Correlation Scatterplots for Selected Variables") +
+     plotTheme()
+
+```
+
+```{r residual_map}
+
+ggplot() +
+  geom_sf(data = hoods, fill = "grey50") +
+  geom_sf(data = houses.test, aes(colour = q5(sale_price.AbsError)), 
+          show.legend = "point", size = .75) +
+  scale_colour_manual(values = palette5,
+                   labels=qBr(houses.test,"sale_price.AbsError"),
+                   name="Quintile\nBreaks") +
+  labs(title="APE") +
+  mapTheme()
+
+
+#Moran's I
+coords <- st_coordinates(houses) 
+
+neighborList <- knn2nb(knearneigh(coords, 5))
+
+spatialWeights <- nb2listw(neighborList, style="W")
+
+houses$lagPrice <- lag.listw(spatialWeights, houses$sale_price)
+
+coords.test <-  st_coordinates(houses.test) 
+
+neighborList.test <- knn2nb(knearneigh(coords.test, 5))
+
+spatialWeights.test <- nb2listw(neighborList.test, style="W")
+
+testAE <- 
+  houses.test %>%
+  dplyr::select(sale_price.Predict, sale_price.AbsError)
+
+houses.inf <- !is.infinite(houses.test)
+
+houses.test %>% 
+  mutate(lagPriceError = lag.listw(spatialWeights.test, sale_price.AbsError)) %>%
+  ggplot()+
+  geom_point(aes(x =lagPriceError, y = sale_price.AbsError))
+
+moranTest <- moran.mc(houses.test$sale_price.AbsError, 
+                      spatialWeights.test, nsim = 999, na.action = na.omit)
+ 
+ggplot(as.data.frame(moranTest$res[c(1:999)]), aes(moranTest$res[c(1:999)])) +
+  geom_histogram(binwidth = 0.01) +
+  geom_vline(aes(xintercept = moranTest$statistic), colour = "#FA7800",size=1) +
+  scale_x_continuous(limits = c(-1, 1)) +
+  labs(title="Observed and permuted Moran's I",
+       subtitle= "Observed Moran's I in orange",
+       x="Moran's I",
+       y="Count") +
+  plotTheme()
 
 ```
