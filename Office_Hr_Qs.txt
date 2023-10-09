@@ -1,0 +1,7 @@
+Questions:
+
+Getting negative price predictions
+
+What data to use for last 2 things, houses.model.test, or all data?
+
+Summary Statistics table

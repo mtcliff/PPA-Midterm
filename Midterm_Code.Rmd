@@ -115,12 +115,14 @@ ggplot() +
 
 ```
 
+##Introduction
+
 ```{r read_data}
-allhouses <- 
+houses <- 
   st_read("https://raw.githubusercontent.com/mafichman/musa_5080_2023/main/Midterm/data/2023/studentData.geojson", quiet = TRUE) %>%
   st_transform('ESRI:102729')
 
-houses <- allhouses %>% dplyr::filter(toPredict == "MODELLING")
+
 
 parks <- 
   st_read("https://opendata.arcgis.com/datasets/d52445160ab14380a673e5849203eb64_0.geojson", 
@@ -187,7 +189,7 @@ tracts <- tracts %>%
 
 ```
 
-```{r add_census}
+```{r add_census, warning=FALSE}
 
 houses <-
   st_intersection(houses, (tracts %>% dplyr::select(whitePct, MedInc, degPct)))
@@ -307,15 +309,17 @@ houses <- houses %>%
 
 ```{r summary_table}
 
+houses.model <- houses %>% dplyr::filter(toPredict == "MODELLING")
+
 allNumVars <- 
-  st_drop_geometry(houses) %>%
+  st_drop_geometry(houses.model) %>%
   dplyr::select(sale_price, total_livable_area, year_built, exterior_condition, fireplaces, 
                 frontage, garage_spaces, interior_condition, total_livable_area,  
                 crimes.Buffer, crime_nn1, crime_nn2, crime_nn3, crime_nn4, crime_nn5, 
                 parks.Buffer, prodRatio, TOTAL_LPSS, TOTAL_HPSS, price_lag, degPct)
 
 qualVars <- 
-  st_drop_geometry(houses) %>%
+  st_drop_geometry(houses.model) %>%
   dplyr::select(sale_price, building_code_description_new, quality_grade, view_type, ES_ID,
                  NAME)
 
@@ -335,7 +339,7 @@ qualVars %>% group_by(building_code_description_new) %>%
 
 ```{r correlation_matrix, message = FALSE}
 numericVars <- 
-  select_if(st_drop_geometry(houses), is.numeric) %>%
+  select_if(st_drop_geometry(houses.model), is.numeric) %>%
   dplyr::select(sale_price, total_livable_area, year_built, exterior_condition, fireplaces, 
                 frontage, garage_spaces, interior_condition, total_livable_area, degPct, 
                 crimes.Buffer, crime_nn1, crime_nn2, crime_nn3, crime_nn4, crime_nn5, 
@@ -361,9 +365,9 @@ numericVars %>%
 
 ```{r correlation_scatterplots, warning=FALSE}
 
-st_drop_geometry(houses) %>% 
+st_drop_geometry(houses.model) %>% 
   dplyr::select(sale_price, total_livable_area, TOTAL_HPSS, price_lag, crime_nn3) %>%
-  filter(sale_price <= 1000000, houses$year_built > 1523, total_livable_area < 10000,
+  filter(sale_price <= 1000000, houses.model$year_built > 1523, total_livable_area < 10000,
          price_lag<=1000000) %>%
   gather(Variable, Value, -sale_price) %>% 
    ggplot(aes(Value, sale_price)) +
@@ -380,10 +384,10 @@ st_drop_geometry(houses) %>%
 #parks.Buffer
 ggplot() +
   geom_sf(data = hoods, fill = "grey50") +
-  geom_sf(data = houses, aes(colour = q5(parks.Buffer)), 
+  geom_sf(data = houses.model, aes(colour = q5(parks.Buffer)), 
           show.legend = "point", size = .75) +
   scale_colour_manual(values = palette5,
-                   labels=qBr(houses,"parks.Buffer"),
+                   labels=qBr(houses.model,"parks.Buffer"),
                    name="Quintile\nBreaks") +
   labs(title="PPR Parks within 1/2 Mile, Philadelphia") +
   mapTheme()
@@ -391,10 +395,10 @@ ggplot() +
 #crime_nn3
 ggplot() +
   geom_sf(data = hoods, fill = "grey50") +
-  geom_sf(data = houses, aes(colour = q5(crime_nn3)), 
+  geom_sf(data = houses.model, aes(colour = q5(crime_nn3)), 
           show.legend = "point", size = .75) +
   scale_colour_manual(values = palette5,
-                   labels=qBr(houses,"crime_nn3"),
+                   labels=qBr(houses.model,"crime_nn3"),
                    name="Quintile\nBreaks") +
   labs(title="K=3 Nearest Neighbor Score\nfor Aggravated Assault, Philadelphia") +
   mapTheme()
@@ -407,10 +411,10 @@ ggplot() +
 
 ggplot() +
   geom_sf(data = hoods, fill = "grey40") +
-  geom_sf(data = houses, aes(colour = q5(sale_price)), 
+  geom_sf(data = houses.model, aes(colour = q5(sale_price)), 
           show.legend = "point", size = .75) +
   scale_colour_manual(values = palette5,
-                   labels=qBr(houses,"sale_price"),
+                   labels=qBr(houses.model,"sale_price"),
                    name="Quintile\nBreaks") +
   labs(title="sale price") +
   mapTheme()
@@ -453,39 +457,39 @@ ggplot()+
 
 ```
 
+##Methods
 
 ```{r regression_test, warning=FALSE}
 
 inTrain <- createDataPartition(
-              y = paste(houses$building_code_description_new, houses$quality_grade,
-                        houses$view_type, houses$ES_ID, houses$NAME), 
-              p = .60, list = FALSE)
-houses.training <- houses[inTrain,] 
-houses.test <- houses[-inTrain,]  
+  y = paste(houses$building_code_description_new, houses$quality_grade,
+                        houses$view_type, houses$ES_ID, houses$NAME),            
+  p = .60, list = FALSE)
+houses.model.training <- houses.model[inTrain,] 
+houses.model.test <- houses.model[-inTrain,]  
  
 reg.training <- 
-  lm(houses.training$sale_price ~ ., data = as.data.frame(houses.training) %>% 
-                             dplyr::select(total_livable_area,  exterior_condition,
+  lm(houses.model.training$sale_price ~ ., data = as.data.frame(houses.model.training) %>% 
+                             dplyr::select(total_livable_area,
                                            fireplaces, 
-                                           interior_condition, total_livable_area,
-                                           crime_nn3, parks.Buffer, prodRatio,
-                                           degPct, price_lag,
-                                           building_code_description_new,
-                                           view_type))
+                                           total_livable_area,
+                                           crime_nn3, parks.Buffer, 
+                                           degPct, price_lag
+                                           ))
 
 summ(reg.training)
 
-houses.test <-
-  houses.test %>%
+houses.model.test <-
+  houses.model.test %>%
   mutate(Regression = "Baseline Regression",
-         sale_price.Predict = predict(reg.training, houses.test),
+         sale_price.Predict = predict(reg.training, houses.model.test),
          sale_price.Error = sale_price.Predict - sale_price,
          sale_price.AbsError = abs(sale_price.Predict - sale_price),
          sale_price.APE = (abs(sale_price.Predict - sale_price)) / sale_price.Predict)%>%
   filter(sale_price < 5000000) 
 
 
-houses.test %>% 
+houses.model.test %>% 
   st_drop_geometry() %>%
   summarize(MAE = mean(sale_price.AbsError, na.rm = T),
             MAPE = mean(sale_price.APE, na.rm = T)) %>%
@@ -501,15 +505,13 @@ fitControl <- trainControl(method = "cv", number = 100)
 set.seed(825)
 
 reg.cv <- 
-  train(sale_price ~ ., data = st_drop_geometry(houses) %>% 
+  train(sale_price ~ ., data = st_drop_geometry(houses.model) %>% 
                                 dplyr::select(sale_price, total_livable_area, 
-                                              exterior_condition,
-                                              fireplaces, interior_condition,
+                                              fireplaces,
                                               total_livable_area,
-                                              crime_nn3, parks.Buffer, prodRatio,
-                                              degPct, price_lag,
-                                              building_code_description_new,
-                                              view_type), 
+                                              crime_nn3, parks.Buffer,
+                                              degPct, price_lag
+                                              ), 
      method = "lm", trControl = fitControl, na.action = na.pass)
 
 reg.cv
@@ -523,7 +525,7 @@ ggplot(reg.cv$resample, aes(x=MAE)) +
 
 ```{r price_comparison, warning=FALSE}
 
-st_drop_geometry(houses.test) %>% 
+st_drop_geometry(houses.model.test) %>% 
   dplyr::select(sale_price, sale_price.Predict) %>%
   filter(sale_price <= 1000000, sale_price.Predict <=1000000) %>%
   ggplot(aes(sale_price, sale_price.Predict)) +
@@ -534,47 +536,43 @@ st_drop_geometry(houses.test) %>%
 
 ```
 
-```{r residual_map}
+```{r residual_map, warning=FALSE}
 
 ggplot() +
   geom_sf(data = hoods, fill = "grey50") +
-  geom_sf(data = houses.test, aes(colour = q5(sale_price.AbsError)), 
+  geom_sf(data = houses.model.test, aes(colour = q5(sale_price.AbsError)), 
           show.legend = "point", size = .75) +
   scale_colour_manual(values = palette5,
-                   labels=qBr(houses.test,"sale_price.AbsError"),
+                   labels=qBr(houses.model.test,"sale_price.AbsError"),
                    name="Quintile\nBreaks") +
   labs(title="APE") +
   mapTheme()
 
 
 #Moran's I
-coords <- st_coordinates(houses) 
+coords <- st_coordinates(houses.model) 
 
 neighborList <- knn2nb(knearneigh(coords, 5))
 
 spatialWeights <- nb2listw(neighborList, style="W")
 
-houses$lagPrice <- lag.listw(spatialWeights, houses$sale_price)
+houses.model$lagPrice <- lag.listw(spatialWeights, houses.model$sale_price)
 
-coords.test <-  st_coordinates(houses.test) 
+coords.test <-  st_coordinates(houses.model.test) 
 
 neighborList.test <- knn2nb(knearneigh(coords.test, 5))
 
 spatialWeights.test <- nb2listw(neighborList.test, style="W")
 
-testAE <- 
-  houses.test %>%
-  dplyr::select(sale_price.Predict, sale_price.AbsError)
-
-houses.inf <- !is.infinite(houses.test)
-
-houses.test %>% 
-  mutate(lagPriceError = lag.listw(spatialWeights.test, sale_price.AbsError)) %>%
+houses.model.test %>% 
+  mutate(lagPriceError = lag.listw(spatialWeights.test, sale_price.Error, 
+                                   NAOK = TRUE)) %>%
   ggplot()+
-  geom_point(aes(x =lagPriceError, y = sale_price.AbsError))
+  geom_point(aes(x =lagPriceError, y = sale_price.Error))
 
-moranTest <- moran.mc(houses.test$sale_price.AbsError, 
-                      spatialWeights.test, nsim = 999, na.action = na.omit)
+moranTest <- moran.mc(houses.model.test$sale_price.AbsError, 
+                      spatialWeights.test, nsim = 999, na.action = na.omit, 
+                      zero.policy = TRUE)
  
 ggplot(as.data.frame(moranTest$res[c(1:999)]), aes(moranTest$res[c(1:999)])) +
   geom_histogram(binwidth = 0.01) +
@@ -587,3 +585,74 @@ ggplot(as.data.frame(moranTest$res[c(1:999)]), aes(moranTest$res[c(1:999)])) +
   plotTheme()
 
 ```
+
+```{r predict_map, warning=FALSE}
+
+houses.test <-
+  houses %>%
+  mutate(Regression = "Baseline Regression",
+         sale_price.Predict = predict(reg.training, houses),
+         sale_price.Error = sale_price.Predict - sale_price,
+         sale_price.AbsError = abs(sale_price.Predict - sale_price),
+         sale_price.APE = (abs(sale_price.Predict - sale_price)) / sale_price.Predict)%>%
+  filter(sale_price < 5000000) 
+
+ggplot() +
+  geom_sf(data = hoods, fill = "grey50") +
+  geom_sf(data = houses.test, aes(colour = q5(sale_price.Predict)), 
+          show.legend = "point", size = .75) +
+  facet_wrap("toPredict") +
+  scale_colour_manual(values = palette5,
+                   labels=qBr(houses.test,"sale_price.Predict"),
+                   name="Quintile\nBreaks") +
+  labs(title="Predicted Price") +
+  mapTheme()
+
+```
+
+```{r hood_MAPE, warning=FALSE}
+
+st_drop_geometry(houses.model.test) %>%
+  #filter(sale_price.APE < 127) %>%
+  group_by(NAME) %>%
+  summarize(mean.MAPE = mean(sale_price.APE, na.rm = T)) %>%
+  ungroup() %>% 
+  left_join(hoods, by = c("NAME" = "NAME")) %>%
+    st_sf() %>%
+    ggplot() + 
+      geom_sf(aes(fill = mean.MAPE)) +
+      #geom_sf(data = houses.model.test, colour = "black", size = .5) +
+      scale_fill_gradient(low = palette5[1], high = palette5[5],
+                          name = "MAPE") +
+      labs(title = "Mean test set MAPE by neighborhood") +
+      mapTheme()
+
+outlier <- houses.model.test %>% filter(sale_price.Predict < 0)
+
+```
+
+```{r income_context, warning=FALSE}
+
+tracts <-
+  tracts %>%
+  mutate(incomeContext = ifelse(MedInc > 77454, "High Income", "Low Income"))
+
+ggplot() + geom_sf(data = na.omit(tracts), aes(fill = incomeContext)) +
+    scale_fill_manual(values = c("#25CB10", "#FA7800"), name="Income Context") +
+    labs(title = "Income Context") +
+    mapTheme() + theme(legend.position="bottom")
+
+st_join(houses.model.test, tracts) %>% 
+  filter(!is.na(incomeContext)) %>%
+  group_by(incomeContext) %>%
+  summarize(mean.MAPE = scales::percent(mean(sale_price.APE, na.rm = T))) %>%
+  st_drop_geometry() %>%
+  spread(incomeContext, mean.MAPE) %>%
+  kable(caption = "Test set MAPE by neighborhood income context") %>%
+  kable_styling(bootstrap_options = "condensed", full_width = F)
+
+```
+
+##Discussion
+
+##Conclusion
